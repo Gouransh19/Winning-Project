@@ -5,6 +5,9 @@ export interface Prompt {
   name: string;
   template: string;
   description: string;
+  // Optional timestamps managed by storage
+  createdAt?: number;
+  updatedAt?: number;
 }
 
 export interface Context {

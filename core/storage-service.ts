@@ -191,3 +191,5 @@ export class ChromeStorageService implements IStorageService {
   }
 }
 
+// (Prompt type is imported from ./types — do not redeclare here)
+

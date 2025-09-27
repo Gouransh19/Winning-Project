@@ -4,7 +4,8 @@
   "main": "index.js",
   "scripts": {
     "build": "node esbuild.mjs",
-    "watch": "node esbuild.mjs --watch"
+    "watch": "node esbuild.mjs --watch",
+    "test": "vitest"
   },
   "keywords": [],
   "author": "",
@@ -13,6 +14,8 @@
   "devDependencies": {
     "@types/chrome": "^0.1.12",
     "esbuild": "^0.25.10",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "vitest": "^1.0.0",
+    "@types/node": "^18.0.0"
   }
 }

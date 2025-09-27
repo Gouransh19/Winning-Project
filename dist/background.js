@@ -44,6 +44,7 @@
   // background.ts
   var storage = new ChromeStorageService();
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    console.log("BACKGROUND: received message", message);
     switch (message.type) {
       case "GET_PROMPTS_REQUEST":
         storage.getPrompts().then((prompts) => {

@@ -136,6 +136,11 @@ export interface IAccessibilityService {
    * @param container The container to clean up
    */
   cleanup(container: HTMLElement): void;
+
+  /**
+   * Store the currently focused element before opening a modal
+   */
+  storeCurrentFocus(): void;
 }
 
 /**

@@ -1,0 +1,117 @@
+One clear, high‑leverage macro goal for the next phase
+
+- Macro goal: Finish the data‑persistence vertical slice — make storage map‑first and implement the “save prompt” (+) vertical slice (UI → message → background → atomic, concurrency‑safe persistence → confirmation + immediate availability in `//` palette).
+
+Why this is the right next macro goal (first‑principles)
+- State is where complexity explodes. The requirements repeatedly call out a map‑backed adapter as the canonical data model because core operations are keyed (add/update/delete/get-by-id). From first principles: if you remove ambiguity and make the canonical shape of shared state explicit (a Map), you remove a large class of bugs and make reasoning about the system O(1) for single‑item ops.
+- Interfaces are your invariants. The system already respects a clean `IStorageService` contract. By finishing the storage adapter and the save‑prompt vertical slice, you verify that the interface is complete, that the contract is enforced end‑to‑end, and that the system’s black‑box guarantees hold in practice.
+- Vertical slices reduce integration risk. We already validated the `//` slice. The next highest risk (and most value) is making new data actually persist and be created via the UI. That gives a portable demo: save a prompt, then call `//` and see it immediately. This proves the architecture.
+- SICP / simplicity rule: do the most direct thing that proves the invariant (map storage + one vertical "save" slice). This is minimal, high‑confidence, and unlocks many future features (context saving, enhancement, syncing).
+
+What “finished” looks like (concrete end state)
+- storage-service.ts stores prompts internally as an object/map keyed by id in chrome.storage, but `getPrompts()` still returns an ordered array for the UI.
+- `savePrompt(prompt)` performs a safe, concurrency‑aware update (read → modify → set) with a retry/merge guard; it returns after the data is durably written.
+- content.ts detects the `+` trigger, opens a small modal that collects `name` + `description` (and optional id), sends `SAVE_PROMPT_REQUEST` to background, and shows success/failure toast.
+- background.ts handles `SAVE_PROMPT_REQUEST` by calling `storage.savePrompt` and replies `SAVE_PROMPT_RESPONSE` on success (or `ERROR` message on failure).
+- After success, `//` immediately shows the saved prompt in the palette without page reload.
+- Unit tests: storage adapter tested (happy path + concurrent write case), message routing tested (mock storage).
+- Dev and demo checklist: seedable storage for demos, single commit snapshot, and CI run for build/test.
+
+Why this unlocks the entire end‑state
+- Once saving and map persistence are correct, everything else (context saving, prompt enhance, sync, server persistence) is plumbing and UX — lower cognitive complexity and lower risk.
+- The architecture is validated: UI is a thin client, core logic is pure where possible, storage is replaceable. That fulfills many axioms in your “HowToOperate and END GOAL.”
+
+Concrete recommended implementation plan (small vertical tasks + acceptance criteria)
+
+1) Task A — Implement map‑first storage adapter (core)
+   - What to change:
+     - Internally persist a plain object keyed by id in `chrome.storage.local` under `prompts_map` (or single key `prompts` whose value is an object).
+     - `getPrompts()` returns Object.values(map) sorted by insertion time or name (stable).
+     - `savePrompt(p)`:
+       - generate id if missing,
+       - read map,
+       - set map[id] = prompt,
+       - write map back.
+       - implement simple retry loop: if `chrome.runtime.lastError`, re‑read and attempt a merge (3 attempts).
+   - Acceptance criteria:
+     - Unit tests for `getPrompts()` and `savePrompt()` using a mocked `chrome.storage` (or MockStorageService).
+     - Manual test: after save, `chrome.storage.local.get('prompts')` returns a map/object and `getPrompts()` returns array view.
+   - Estimated time: 2–4 hours (single file + tests).
+
+2) Task B — Implement `+` save‑prompt vertical slice (UI)
+   - What to add:
+     - Content script: detect `+` typed (same detection approach as `//`) or a keyboard shortcut.
+     - Small unobtrusive modal overlay (name, description, Save button). Keep it minimal and keyboard friendly.
+     - On Save: send `SAVE_PROMPT_REQUEST` to background with Prompt payload.
+     - On success: show ephemeral toast and close modal.
+   - Background:
+     - Add message type `SAVE_PROMPT_REQUEST` and `SAVE_PROMPT_RESPONSE` to types.ts Message union.
+     - Route the new message to `storage.savePrompt`.
+   - Acceptance criteria:
+     - End-to-end test: type `+`, fill modal, save; immediately type `//` and confirm new prompt appears.
+   - Estimated time: 4–8 hours (UI + integration + minor styles).
+
+3) Task C — Concurrency hardening & tests
+   - What:
+     - Add unit tests that simulate concurrent `savePrompt()` calls by invoking storage from multiple promises; verify no lost updates (merge behavior or last-writer policy is explicit).
+     - Optionally implement a simple queue in background for write operations (serialize writes inside the service worker).
+   - Acceptance criteria:
+     - Tests pass, no data loss on simulated concurrent writes.
+   - Estimated time: 2–4 hours.
+
+4) Task D — UX polish & keyboard
+   - What:
+     - Add keyboard navigation for palette and modal, ARIA attributes, reposition on scroll/resize.
+   - Acceptance criteria:
+     - Keyboard-only flow for `+` and `//` works; accessible labels, focus management correct.
+   - Estimated time: 3–6 hours.
+
+5) Task E — Commit, CI, seed, demo
+   - Add `.gitignore` (ignore dist, node_modules), remove accidental manifest.json.
+   - Commit snapshot with atomic, descriptive message.
+   - Add seed script for demo (service worker seed snippet in README or development task).
+   - Add simple GitHub Action to run `npm run build` and run unit tests.
+   - Acceptance criteria:
+     - CI green on PR, demo works locally with seeded data.
+   - Estimated time: 2–4 hours.
+
+Concrete immediate actions you can run right now (copy/paste)
+- Build (you already do this):
+```powershell
+npm run build
+```
+- Seed storage for an immediate demo (run in Service Worker console or extension background inspector):
+```js
+chrome.storage.local.set({ prompts: {
+  'p1': { id: 'p1', name: 'first-principles', template: 'Apply first principles to {{topic}}', description: 'Deconstruct a problem.' },
+  'p2': { id: 'p2', name: 'systems-thinking', template: 'Apply systems thinking to {{system}}', description: 'Analyze the whole system.' }
+}}, ()=>console.log('prompts.map seeded'));
+```
+- After seeding: type `//` in the chat input and verify the palette lists `first-principles` and `systems-thinking`.
+
+Edge cases & failure modes to plan for (and how we mitigate them)
+- Race on writes → mitigation: retry/merge or single‑writer queue in the service worker.
+- Large prompt set → mitigation: index or partial loads; keep `getPrompts()` optimized for common UI use.
+- Host page DOM changes → mitigation: multi‑selector logic, MutationObserver fallback, and a safe failure UI that explains “command not supported on this page”.
+- MV3 ephemeral worker logging → mitigation: keep dev workflow to open the worker inspector when debugging; add structured logging to `chrome.storage` for traces if necessary.
+
+How success will be measured (metrics)
+- Demo: after saving a prompt via `+`, the `//` palette shows it in <1 second (target <200ms for felt latency).
+- Correctness: unit tests for storage adapter with >95% code coverage on core storage logic.
+- Robustness: concurrency tests simulate N=10 concurrent saves with 0 lost updates.
+- Developer experience: new engineer can understand storage and message contract in <30 minutes.
+
+Who should do what (roles)
+- You / core builder: Task A (storage adapter) + Task B (save UI) — core knowledge of contracts required.
+- Frontend: Task D (keyboard, ARIA, UX polish).
+- QA / tester: run seed demo and concurrency tests; verify behavior across host pages.
+- Ops / CI owner (or you): set up CI to run build + tests.
+
+Final recommendation (one short sentence)
+- Do the storage adapter + `+` vertical slice next — it’s the smallest macro change that proves the system’s core invariants (state model + contract), unlocks a demoable product, and reduces the most cognitive and integration risk.
+
+If you want I’ll:
+- Implement Task A (map‑first adapter) now in storage-service.ts and include unit tests, or
+- Implement the Task B `+` UI vertical slice next.
+
+Which do you want me to start with? (I recommend Task A first — then Task B.)

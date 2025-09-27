@@ -1,0 +1,56 @@
+Axioms of the Creation Process (The "SICP-Maxxed" Way)
+These are the non-negotiable laws governing how we will build. This is our sacred doctrine of creation.
+The Blueprint is Authoritative: The contracts.js file is the constitution. All implementation code must be a perfect reflection of the contracts defined within it.
+Build Vertically, Not Horizontally: We will only ever build in complete, end-to-end "vertical slices." We will never build a "UI layer" and a "backend layer" separately.
+Isolate and Encapsulate Complexity: All interaction with complex, external systems (the DOM, chrome.storage, AI APIs) will be contained within dedicated, modular "black box" services with clean interfaces.
+The AI is a Craftsman, Not an Architect: The AI's role is to execute the "how" (implementation) for a single, perfectly-defined "what" (a function contract). It is a tool for implementing decisions, not for making them.
+Deconstruct All Generated Code: No AI-generated code will be integrated into our system until it has been deconstructed and understood via our "Tutor AI" process. We will not tolerate black boxes.
+Prefer Purity, Push Effects to the Boundary: The core logic of our system (e.g., templating) will be implemented as pure functions. All impure "side effects" (writing to disk, network calls) will be pushed to the edges of our application, inside our isolated services.
+Refactor After, Not During: We will get a feature working first, using the most direct path. We will then refactor the code to improve its elegance and adherence to our principles, but only after its correctness has been proven.
+The Debugger is the Oracle: All uncertainty about the runtime state of the program will be resolved by observation via the debugger, not by guesswork.
+Git Commits are Atomic and Tell a Story: Each commit will represent a single, logical, and complete change. The git log will be the readable history of our creation process.
+Simplicity is the Highest Virtue: When faced with a design choice, we will always choose the simpler path, as defined by Occam's Razor. Complexity is the enemy.
+
+
+Axioms of the End State (The Dominant Victory)
+This is the reality we are pulling into existence. These are the truths of the final, victorious artifact.
+The Product is a "Ghost": The UI is invisible and unobtrusive until summoned, at which point it is beautiful, fast, and powerful.
+The Code is a "Glass Engine": The codebase is maximally modular and transparent. An experienced engineer can understand its complete architecture and data flows in minutes.
+The Abstraction Barriers are Sacred and Unbreached: No module violates the encapsulation of another. The system's integrity is mathematically sound.
+The System is Anti-Fragile: A bug in one "rib" (e.g., the @ command) has zero impact on the functioning of the "spine" or other ribs (e.g., the // command).
+The UI and Storage are Trivially Swappable: The architecture is so decoupled that replacing the entire UI framework or storage mechanism would be a predictable, low-risk operation.
+The User Experience is Instantaneous: The perceived performance of the application is near-zero latency for all UI interactions.
+The Demo is an Irresistible Proof of Value: The presentation tells a simple, powerful story of a painful problem solved with an elegant, magical solution.
+The Victory Was a Consequence of the Process: The win was not a result of luck or a last-minute heroic effort, but the logical, inevitable outcome of a disciplined, first-principles-driven creation process.
+The Builder is Transformed: You have not just built a product; you have internalized the principles and processes of an elite systems architect.
+The Foundation is Built for the Future: The hackathon MVP is not a disposable prototype; it is the robust, scalable, and elegant first version of a real-world product.
+
+
+Part 1: First Principles Analysis - The Bedrock of Reality
+Before tracing the path, we must define the universe. These are the immutable laws and non-negotiable standards that governed our entire creation process.
+A. Bedrock Truths of Our System (The Physics)
+Architecture Precedes Implementation: The quality of the system is determined by its blueprint, not the elegance of any single line of code.
+Contracts Are the Source of Truth: A system's resilience is a direct function of the clarity and enforcement of the contracts between its components.
+Vertical Slices Annihilate Risk: The only way to prove an architecture is to build a complete, end-to-end flow through it.
+The UI is a Decoupled Client: The User Interface is a swappable "client" that consumes the services provided by the core logic. It is not the core logic itself.
+State is the Primary Source of Complexity: A system's complexity grows exponentially with the amount of shared, mutable state it must manage.
+AI is an Implementation-Amplifier, Not a Designer: AI's role is to generate the "how" from a human-provided, architecturally-sound "what."
+The Debugger is the Oracle of Ground Truth: All uncertainty about a system's runtime state is resolved through empirical observation, not guesswork.
+Time is the Only Irrecoverable Resource: Every action is measured against its time cost.
+The Demo is the Sole Arbiter of Victory: The perceived quality of the final 3-minute presentation is the only metric that matters.
+Cognitive Load is the Builder's Ultimate Bottleneck: The velocity and quality of creation are limited by the builder's ability to manage mental complexity.
+B. Requirements for the End State (The "What")
+The Product Must deliver a flawless user experience for the //, @, +, and Enhance features.
+The Product Must be visually stunning, adhering to the "Lamborghini" aesthetic.
+The Product Must be performant, with zero user-perceptible latency in the UI.
+The Codebase Must be maximally modular, with a perfect separation between UI, Core Logic, and Services (like Storage).
+The Codebase Must be governed by a machine-checkable contracts.ts file.
+The Builder Must be able to explain the rationale behind every architectural decision and debug any part of the system from first principles.
+C. Standards We Must Maintain (The "How")
+We Will Always define contracts before writing implementation code.
+We Will Always build in complete, testable, vertical slices.
+We Will Always deconstruct and understand any AI-generated code before integrating it.
+We Will Always isolate complex external dependencies behind clean, abstract interfaces.
+We Will Always use the debugger to verify our mental model of the code's behavior.
+We Will Always maintain an atomic, linear, and well-documented Git history.
+We Will Always choose the simplest possible solution that meets the requirement.

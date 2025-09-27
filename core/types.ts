@@ -18,6 +18,7 @@ export interface Context {
 
 // Message contracts for the background/message router
 import { SavePromptUIResult } from './ui-service';
+import { ConcurrencyMetrics } from './concurrency-service';
 
 export type Message =
   | { type: 'GET_PROMPTS_REQUEST' }
@@ -25,5 +26,9 @@ export type Message =
   // Request to save a new prompt, initiated by the UI.
   | { type: 'SAVE_PROMPT_REQUEST'; payload: SavePromptUIResult }
   // Response to a save request, indicating success or failure.
-  | { type: 'SAVE_PROMPT_RESPONSE'; payload: { success: boolean; error?: string } };
+  | { type: 'SAVE_PROMPT_RESPONSE'; payload: { success: boolean; error?: string } }
+  // Request for concurrency metrics
+  | { type: 'GET_CONCURRENCY_METRICS_REQUEST' }
+  // Response with concurrency metrics
+  | { type: 'GET_CONCURRENCY_METRICS_RESPONSE'; payload: ConcurrencyMetrics | null };
 

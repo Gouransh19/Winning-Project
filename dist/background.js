@@ -25,7 +25,9 @@
   var makeId = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 8);
   var delay = (ms) => new Promise((res) => setTimeout(res, ms));
   var ChromeStorageService = class {
-    // Map-first storage under chrome.storage.local.prompts
+    constructor(concurrencyService2) {
+      this.concurrencyService = concurrencyService2;
+    }
     async readPromptsMap() {
       return new Promise((resolve, reject) => {
         try {
@@ -134,10 +136,293 @@
       }
       throw new Error("deletePrompt failed after retries: " + (lastErr && lastErr.message ? lastErr.message : String(lastErr)));
     }
+    // Atomic operations for concurrency safety
+    async savePromptAtomic(prompt) {
+      if (this.concurrencyService) {
+        return this.concurrencyService.executeAtomicWithRetry(async () => {
+          const id = prompt.id || makeId();
+          const map = await this.readPromptsMap();
+          const prev = map[id];
+          const createdAt = (prev == null ? void 0 : prev.createdAt) || prompt.createdAt || Date.now();
+          map[id] = __spreadProps(__spreadValues(__spreadValues({}, prev), prompt), {
+            id,
+            createdAt,
+            updatedAt: Date.now()
+          });
+          await this.writePromptsMap(map);
+          const after = await this.readPromptsMap();
+          if (!after[id]) {
+            throw new Error("Atomic write verification failed");
+          }
+        });
+      } else {
+        return this.savePrompt(prompt);
+      }
+    }
+    async deletePromptAtomic(id) {
+      if (this.concurrencyService) {
+        return this.concurrencyService.executeAtomicWithRetry(async () => {
+          const map = await this.readPromptsMap();
+          if (map.hasOwnProperty(id)) {
+            delete map[id];
+            await this.writePromptsMap(map);
+            const after = await this.readPromptsMap();
+            if (after[id]) {
+              throw new Error("Atomic delete verification failed");
+            }
+          }
+        });
+      } else {
+        return this.deletePrompt(id);
+      }
+    }
+    async getConcurrencyMetrics() {
+      if (this.concurrencyService) {
+        return this.concurrencyService.getMetrics();
+      } else {
+        return {
+          totalOperations: 0,
+          successfulOperations: 0,
+          failedOperations: 0,
+          averageLatency: 0,
+          queueDepth: 0,
+          lastOperationTime: 0
+        };
+      }
+    }
+  };
+
+  // core/concurrency-service.ts
+  var DEFAULT_CONCURRENCY_CONFIG = {
+    maxRetries: 3,
+    baseDelayMs: 10,
+    maxDelayMs: 1e3,
+    enableMetrics: true,
+    logOperations: false
+  };
+  var calculateBackoffDelay = (attempt, baseDelay, maxDelay) => {
+    const delay2 = baseDelay * Math.pow(2, attempt - 1);
+    return Math.min(delay2, maxDelay);
+  };
+  var generateOperationId = () => {
+    return "op_".concat(Date.now(), "_").concat(Math.random().toString(36).slice(2, 8));
+  };
+  var WriteQueueService = class {
+    constructor() {
+      this.queue = [];
+      this.processing = false;
+      this.metrics = {
+        totalOperations: 0,
+        successfulOperations: 0,
+        failedOperations: 0,
+        averageLatency: 0,
+        queueDepth: 0,
+        lastOperationTime: 0
+      };
+    }
+    async enqueue(operation) {
+      const operationId = generateOperationId();
+      const startTime = Date.now();
+      return new Promise((resolve, reject) => {
+        const queuedOp = {
+          id: operationId,
+          operation: async () => {
+            try {
+              const result = await operation();
+              this.recordOperation(true, Date.now() - startTime);
+              resolve(result);
+              return result;
+            } catch (error) {
+              this.recordOperation(false, Date.now() - startTime);
+              reject(error);
+              throw error;
+            }
+          },
+          timestamp: startTime,
+          retryCount: 0
+        };
+        this.queue.push(queuedOp);
+        this.updateQueueDepth();
+        this.processQueue();
+      });
+    }
+    getQueueDepth() {
+      return this.queue.length;
+    }
+    async flush() {
+      while (this.queue.length > 0) {
+        await this.processQueue();
+        await new Promise((resolve) => setTimeout(resolve, 1));
+      }
+    }
+    clear() {
+      this.queue = [];
+      this.updateQueueDepth();
+    }
+    getMetrics() {
+      return __spreadValues({}, this.metrics);
+    }
+    resetMetrics() {
+      this.metrics = {
+        totalOperations: 0,
+        successfulOperations: 0,
+        failedOperations: 0,
+        averageLatency: 0,
+        queueDepth: this.queue.length,
+        lastOperationTime: 0
+      };
+    }
+    async processQueue() {
+      if (this.processing || this.queue.length === 0) {
+        return;
+      }
+      this.processing = true;
+      try {
+        while (this.queue.length > 0) {
+          const operation = this.queue.shift();
+          this.updateQueueDepth();
+          try {
+            await operation.operation();
+          } catch (error) {
+          }
+        }
+      } finally {
+        this.processing = false;
+      }
+    }
+    updateQueueDepth() {
+      this.metrics.queueDepth = this.queue.length;
+    }
+    recordOperation(success, latency) {
+      this.metrics.totalOperations++;
+      if (success) {
+        this.metrics.successfulOperations++;
+      } else {
+        this.metrics.failedOperations++;
+      }
+      if (this.metrics.totalOperations === 1) {
+        this.metrics.averageLatency = latency;
+      } else {
+        const totalLatency = this.metrics.averageLatency * (this.metrics.totalOperations - 1) + latency;
+        this.metrics.averageLatency = totalLatency / this.metrics.totalOperations;
+      }
+      this.metrics.lastOperationTime = Date.now();
+    }
+  };
+  var ConcurrencyService = class {
+    constructor(writeQueue2, config = DEFAULT_CONCURRENCY_CONFIG) {
+      this.writeQueue = writeQueue2;
+      this.config = config;
+      this.metrics = {
+        totalOperations: 0,
+        successfulOperations: 0,
+        failedOperations: 0,
+        averageLatency: 0,
+        queueDepth: 0,
+        lastOperationTime: 0
+      };
+    }
+    async executeAtomic(operation) {
+      const startTime = Date.now();
+      try {
+        const result = await this.writeQueue.enqueue(operation);
+        this.recordOperation(true, Date.now() - startTime);
+        return result;
+      } catch (error) {
+        this.recordOperation(false, Date.now() - startTime);
+        throw error;
+      }
+    }
+    async executeWithRetry(operation, maxRetries = this.config.maxRetries) {
+      const startTime = Date.now();
+      let lastError = null;
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          const result = await operation();
+          this.recordOperation(true, Date.now() - startTime);
+          return result;
+        } catch (error) {
+          lastError = error;
+          if (this.config.logOperations) {
+            console.log("ConcurrencyService: Operation failed (attempt ".concat(attempt, "/").concat(maxRetries, "):"), error);
+          }
+          if (attempt < maxRetries) {
+            const delay2 = calculateBackoffDelay(attempt, this.config.baseDelayMs, this.config.maxDelayMs);
+            await new Promise((resolve) => setTimeout(resolve, delay2));
+          }
+        }
+      }
+      this.recordOperation(false, Date.now() - startTime);
+      throw new Error("Operation failed after ".concat(maxRetries, " attempts: ").concat((lastError == null ? void 0 : lastError.message) || "Unknown error"));
+    }
+    async executeAtomicWithRetry(operation, maxRetries = this.config.maxRetries) {
+      return this.executeAtomic(
+        () => this.executeWithRetry(operation, maxRetries)
+      );
+    }
+    getMetrics() {
+      const queueMetrics = this.writeQueue.getMetrics ? this.writeQueue.getMetrics() : {
+        totalOperations: 0,
+        successfulOperations: 0,
+        failedOperations: 0,
+        averageLatency: 0,
+        queueDepth: this.writeQueue.getQueueDepth(),
+        lastOperationTime: 0
+      };
+      return {
+        totalOperations: this.metrics.totalOperations + queueMetrics.totalOperations,
+        successfulOperations: this.metrics.successfulOperations + queueMetrics.successfulOperations,
+        failedOperations: this.metrics.failedOperations + queueMetrics.failedOperations,
+        averageLatency: this.calculateCombinedAverageLatency(this.metrics, queueMetrics),
+        queueDepth: queueMetrics.queueDepth,
+        lastOperationTime: Math.max(this.metrics.lastOperationTime, queueMetrics.lastOperationTime)
+      };
+    }
+    resetMetrics() {
+      this.metrics = {
+        totalOperations: 0,
+        successfulOperations: 0,
+        failedOperations: 0,
+        averageLatency: 0,
+        queueDepth: 0,
+        lastOperationTime: 0
+      };
+      if (this.writeQueue.resetMetrics) {
+        this.writeQueue.resetMetrics();
+      }
+    }
+    recordOperation(success, latency) {
+      if (!this.config.enableMetrics) return;
+      this.metrics.totalOperations++;
+      if (success) {
+        this.metrics.successfulOperations++;
+      } else {
+        this.metrics.failedOperations++;
+      }
+      if (this.metrics.totalOperations === 1) {
+        this.metrics.averageLatency = latency;
+      } else {
+        const totalLatency = this.metrics.averageLatency * (this.metrics.totalOperations - 1) + latency;
+        this.metrics.averageLatency = totalLatency / this.metrics.totalOperations;
+      }
+      this.metrics.lastOperationTime = Date.now();
+    }
+    calculateCombinedAverageLatency(metrics1, metrics2) {
+      const totalOps = metrics1.totalOperations + metrics2.totalOperations;
+      if (totalOps === 0) return 0;
+      const totalLatency = metrics1.averageLatency * metrics1.totalOperations + metrics2.averageLatency * metrics2.totalOperations;
+      return totalLatency / totalOps;
+    }
   };
 
   // background.ts
-  var storage = new ChromeStorageService();
+  var writeQueue = new WriteQueueService();
+  var concurrencyService = new ConcurrencyService(writeQueue, __spreadProps(__spreadValues({}, DEFAULT_CONCURRENCY_CONFIG), {
+    logOperations: true,
+    // Enable logging for debugging
+    enableMetrics: true
+  }));
+  var storage = new ChromeStorageService(concurrencyService);
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log("BACKGROUND: received message", message);
     switch (message.type) {
@@ -147,19 +432,28 @@
         });
         break;
       case "SAVE_PROMPT_REQUEST":
-        console.log("BACKGROUND: saving prompt", message.payload);
-        storage.savePrompt({
+        console.log("BACKGROUND: saving prompt atomically", message.payload);
+        storage.savePromptAtomic({
           id: "",
           // Will be generated by storage service
           name: message.payload.name,
           template: message.payload.template,
           description: message.payload.description
         }).then(() => {
-          console.log("BACKGROUND: prompt saved successfully");
+          console.log("BACKGROUND: prompt saved successfully with atomic operation");
           sendResponse({ type: "SAVE_PROMPT_RESPONSE", payload: { success: true } });
         }).catch((error) => {
-          console.error("BACKGROUND: failed to save prompt", error);
+          console.error("BACKGROUND: failed to save prompt atomically", error);
           sendResponse({ type: "SAVE_PROMPT_RESPONSE", payload: { success: false, error: error.message } });
+        });
+        break;
+      case "GET_CONCURRENCY_METRICS_REQUEST":
+        console.log("BACKGROUND: providing concurrency metrics");
+        storage.getConcurrencyMetrics().then((metrics) => {
+          sendResponse({ type: "GET_CONCURRENCY_METRICS_RESPONSE", payload: metrics });
+        }).catch((error) => {
+          console.error("BACKGROUND: failed to get concurrency metrics", error);
+          sendResponse({ type: "GET_CONCURRENCY_METRICS_RESPONSE", payload: null });
         });
         break;
     }

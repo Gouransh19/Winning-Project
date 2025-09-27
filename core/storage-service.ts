@@ -1,6 +1,7 @@
 // core/storage-service.ts
 // Interface-first contract for storage implementations
 import { Prompt } from './types';
+import { ConcurrencyMetrics, IConcurrencyService } from './concurrency-service';
 
 // Minimal chrome shim for this workspace. In a real project, install @types/chrome.
 declare const chrome: any;
@@ -9,6 +10,13 @@ export interface IStorageService {
   getPrompts(): Promise<Prompt[]>;
   savePrompt(prompt: Prompt): Promise<void>;
   deletePrompt?(id: string): Promise<void>;
+  
+  // Atomic operations for concurrency safety
+  savePromptAtomic(prompt: Prompt): Promise<void>;
+  deletePromptAtomic?(id: string): Promise<void>;
+  
+  // Metrics and observability
+  getConcurrencyMetrics?(): Promise<ConcurrencyMetrics>;
 }
 
 // Internal canonical record stored in chrome.storage.local.prompts (map by id)
@@ -68,6 +76,11 @@ export class MockStorageService implements IStorageService {
 
 export class ChromeStorageService implements IStorageService {
   // Map-first storage under chrome.storage.local.prompts
+  private concurrencyService?: IConcurrencyService;
+
+  constructor(concurrencyService?: IConcurrencyService) {
+    this.concurrencyService = concurrencyService;
+  }
 
   private async readPromptsMap(): Promise<Record<string, PromptRecord>> {
     return new Promise<Record<string, PromptRecord>>((resolve, reject) => {
@@ -188,6 +201,73 @@ export class ChromeStorageService implements IStorageService {
       }
     }
     throw new Error('deletePrompt failed after retries: ' + (lastErr && lastErr.message ? lastErr.message : String(lastErr)));
+  }
+
+  // Atomic operations for concurrency safety
+  async savePromptAtomic(prompt: Prompt): Promise<void> {
+    if (this.concurrencyService) {
+      return this.concurrencyService.executeAtomicWithRetry(async () => {
+        const id = prompt.id || makeId();
+        const map = await this.readPromptsMap();
+        const prev = map[id];
+        const createdAt = prev?.createdAt || (prompt as any).createdAt || Date.now();
+        
+        map[id] = { 
+          ...prev, 
+          ...prompt, 
+          id, 
+          createdAt, 
+          updatedAt: Date.now() 
+        };
+        
+        await this.writePromptsMap(map);
+        
+        // Verify write persisted
+        const after = await this.readPromptsMap();
+        if (!after[id]) {
+          throw new Error('Atomic write verification failed');
+        }
+      });
+    } else {
+      // Fallback to regular savePrompt if no concurrency service
+      return this.savePrompt(prompt);
+    }
+  }
+
+  async deletePromptAtomic(id: string): Promise<void> {
+    if (this.concurrencyService) {
+      return this.concurrencyService.executeAtomicWithRetry(async () => {
+        const map = await this.readPromptsMap();
+        if (map.hasOwnProperty(id)) {
+          delete map[id];
+          await this.writePromptsMap(map);
+          
+          // Verify deletion
+          const after = await this.readPromptsMap();
+          if (after[id]) {
+            throw new Error('Atomic delete verification failed');
+          }
+        }
+      });
+    } else {
+      // Fallback to regular deletePrompt if no concurrency service
+      return this.deletePrompt(id);
+    }
+  }
+
+  async getConcurrencyMetrics(): Promise<ConcurrencyMetrics> {
+    if (this.concurrencyService) {
+      return this.concurrencyService.getMetrics();
+    } else {
+      return {
+        totalOperations: 0,
+        successfulOperations: 0,
+        failedOperations: 0,
+        averageLatency: 0,
+        queueDepth: 0,
+        lastOperationTime: 0
+      };
+    }
   }
 }
 

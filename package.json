@@ -13,9 +13,10 @@
   "description": "",
   "devDependencies": {
     "@types/chrome": "^0.1.12",
+    "@types/node": "^18.0.0",
     "esbuild": "^0.25.10",
+    "jsdom": "^27.0.0",
     "typescript": "^5.9.2",
-    "vitest": "^1.0.0",
-    "@types/node": "^18.0.0"
+    "vitest": "^1.0.0"
   }
 }

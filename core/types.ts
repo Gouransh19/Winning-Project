@@ -17,7 +17,13 @@ export interface Context {
 }
 
 // Message contracts for the background/message router
+import { SavePromptUIResult } from './ui-service';
+
 export type Message =
   | { type: 'GET_PROMPTS_REQUEST' }
-  | { type: 'GET_PROMPTS_RESPONSE'; payload: Prompt[] };
+  | { type: 'GET_PROMPTS_RESPONSE'; payload: Prompt[] }
+  // Request to save a new prompt, initiated by the UI.
+  | { type: 'SAVE_PROMPT_REQUEST'; payload: SavePromptUIResult }
+  // Response to a save request, indicating success or failure.
+  | { type: 'SAVE_PROMPT_RESPONSE'; payload: { success: boolean; error?: string } };
 

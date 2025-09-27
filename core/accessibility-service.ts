@@ -25,8 +25,9 @@ export const DEFAULT_ACCESSIBILITY_CONFIG: AccessibilityConfig = {
 
 /**
  * Interface for keyboard navigation events
+ * Note: This extends the native DOM KeyboardEvent with additional properties if needed
  */
-export interface KeyboardEvent {
+export interface CustomKeyboardEvent {
   key: string;
   code: string;
   ctrlKey: boolean;
@@ -230,7 +231,7 @@ export class AccessibilityService implements IAccessibilityService {
     this.focusState.trapContainer = container;
     
     // Set up keyboard event listener
-    const keyboardHandler = (event: KeyboardEvent) => {
+    const keyboardHandler = (event: globalThis.KeyboardEvent) => {
       this.handleKeyboardEvent(container, event, effectiveConfig);
     };
     
@@ -284,7 +285,7 @@ export class AccessibilityService implements IAccessibilityService {
   }
 
   handleEscapeKey(container: HTMLElement, onEscape: () => void): void {
-    const escapeHandler = (event: KeyboardEvent) => {
+    const escapeHandler = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.preventDefault();
         event.stopPropagation();
@@ -376,7 +377,7 @@ export class AccessibilityService implements IAccessibilityService {
     }
   }
 
-  private handleKeyboardEvent(container: HTMLElement, event: KeyboardEvent, config: AccessibilityConfig): void {
+  private handleKeyboardEvent(container: HTMLElement, event: globalThis.KeyboardEvent, config: AccessibilityConfig): void {
     if (!config.enableKeyboardNavigation) return;
     
     switch (event.key) {

@@ -83,9 +83,14 @@ describe('UIService', () => {
 
     it('pressing Escape should hide the overlay', () => {
       uiService.showPromptSelector(mockPrompts, vi.fn());
-      expect(document.getElementById('spine-prompt-overlay')).not.toBeNull();
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
-      expect(document.getElementById('spine-prompt-overlay')).toBeNull();
+      const overlay = document.getElementById('spine-prompt-overlay');
+      expect(overlay).not.toBeNull();
+      
+      // Dispatch Escape event on the overlay container
+      if (overlay) {
+        overlay.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+        expect(document.getElementById('spine-prompt-overlay')).toBeNull();
+      }
     });
 
     it('clicking outside the overlay should hide it', () => {

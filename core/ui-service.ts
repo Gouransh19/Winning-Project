@@ -2,6 +2,7 @@
 // Interface-first contract for UI-related operations.
 
 import { Prompt } from './types';
+import { IAccessibilityService, AccessibilityService } from './accessibility-service';
 
 /**
  * Describes the data returned when a user successfully saves a prompt via the UI.
@@ -71,13 +72,15 @@ export interface IUIService {
 
 export class UIService implements IUIService {
   private editableEl: (HTMLElement & { innerText: string }) | null = null;
+  private accessibilityService: IAccessibilityService;
   private readonly TEXTAREA_SELECTORS = [
     '[contenteditable="true"][role="textbox"]',
     '[contenteditable="true"][aria-multiline="true"]',
     '[contenteditable="true"]',
   ];
 
-  constructor() {
+  constructor(accessibilityService?: IAccessibilityService) {
+    this.accessibilityService = accessibilityService || new AccessibilityService();
     this.findEditable();
     if (!this.editableEl) {
       console.warn('UIService: Editable input not found on init; observing DOM.');
@@ -154,40 +157,97 @@ export class UIService implements IUIService {
     if (!this.editableEl) return;
 
     const overlay = this.createOverlay();
+    
+    // Add accessibility attributes
+    overlay.setAttribute('role', 'listbox');
+    overlay.setAttribute('aria-label', 'Prompt selector');
+    overlay.setAttribute('aria-expanded', 'true');
 
     if (prompts.length === 0) {
       const empty = document.createElement('div');
       empty.textContent = 'No prompts available.';
+      empty.setAttribute('role', 'status');
+      empty.setAttribute('aria-live', 'polite');
       overlay.appendChild(empty);
     }
 
-    prompts.forEach(p => {
+    prompts.forEach((p, index) => {
       const btn = document.createElement('button');
       btn.textContent = p.name;
+      btn.setAttribute('role', 'option');
+      btn.setAttribute('aria-label', `${p.name}: ${p.description || 'No description'}`);
+      btn.setAttribute('aria-selected', 'false');
+      btn.setAttribute('tabindex', index === 0 ? '0' : '-1'); // First item is focusable
+      
+      // Enhanced styling for accessibility
       btn.style.display = 'block';
       btn.style.width = '100%';
       btn.style.textAlign = 'left';
       btn.style.margin = '4px 0';
+      btn.style.padding = '8px 12px';
+      btn.style.border = '1px solid transparent';
+      btn.style.borderRadius = '4px';
+      btn.style.backgroundColor = 'transparent';
+      btn.style.cursor = 'pointer';
+      
+      // Focus styles
+      btn.addEventListener('focus', () => {
+        btn.style.backgroundColor = '#e3f2fd';
+        btn.style.borderColor = '#2196f3';
+        btn.setAttribute('aria-selected', 'true');
+        // Remove selection from other items
+        overlay.querySelectorAll('button').forEach(otherBtn => {
+          if (otherBtn !== btn) {
+            otherBtn.setAttribute('aria-selected', 'false');
+            otherBtn.style.backgroundColor = 'transparent';
+            otherBtn.style.borderColor = 'transparent';
+          }
+        });
+      });
+      
+      btn.addEventListener('blur', () => {
+        btn.style.backgroundColor = 'transparent';
+        btn.style.borderColor = 'transparent';
+      });
+      
       btn.addEventListener('click', () => {
         onSelect(p);
         this.hidePromptSelector();
       });
+      
       overlay.appendChild(btn);
     });
 
-    const rect = this.editableEl.getBoundingClientRect();
-    overlay.style.left = `${rect.left + window.scrollX}px`;
-    overlay.style.top = `${rect.bottom + window.scrollY + 6}px`;
+    // Position the overlay
+    this.positionOverlay(overlay);
 
     document.body.appendChild(overlay);
 
-    // Add listeners to close the overlay
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        this.hidePromptSelector();
-        window.removeEventListener('keydown', onKey);
-      }
-    };
+    // Set up accessibility service
+    this.accessibilityService.storeCurrentFocus();
+    this.accessibilityService.setupKeyboardNavigation(overlay);
+    this.accessibilityService.handleEscapeKey(overlay, () => {
+      this.hidePromptSelector();
+    });
+
+    // Handle resize and scroll
+    this.accessibilityService.handleResize(overlay, () => {
+      this.positionOverlay(overlay);
+    });
+    this.accessibilityService.handleScroll(overlay, () => {
+      this.positionOverlay(overlay);
+    });
+
+    // Focus first item
+    this.accessibilityService.focusFirstElement(overlay);
+
+    // Announce to screen readers
+    this.accessibilityService.announceToScreenReader({
+      message: `Prompt selector opened with ${prompts.length} prompts. Use arrow keys to navigate, Enter to select, or Escape to close.`,
+      priority: 'polite'
+    });
+
+    // Add click outside to close
     const onClick = (e: MouseEvent) => {
       if (e.target && overlay.contains(e.target as Node)) return; // Click was inside
       if (e.target !== this.editableEl) {
@@ -195,16 +255,59 @@ export class UIService implements IUIService {
         document.removeEventListener('click', onClick);
       }
     };
-
-    window.addEventListener('keydown', onKey);
     document.addEventListener('click', onClick, { capture: true });
   }
 
   hidePromptSelector(): void {
     const existing = document.getElementById('spine-prompt-overlay');
     if (existing && existing.parentElement) {
+      // Clean up accessibility service
+      this.accessibilityService.cleanup(existing);
+      
+      // Restore focus
+      this.accessibilityService.restoreFocus();
+      
+      // Remove from DOM
       existing.parentElement.removeChild(existing);
+      
+      // Announce to screen readers
+      this.accessibilityService.announceToScreenReader({
+        message: 'Prompt selector closed',
+        priority: 'polite'
+      });
     }
+  }
+
+  private positionOverlay(overlay: HTMLElement): void {
+    if (!this.editableEl) return;
+
+    const rect = this.editableEl.getBoundingClientRect();
+    const overlayRect = overlay.getBoundingClientRect();
+    
+    // Calculate position
+    let left = rect.left + window.scrollX;
+    let top = rect.bottom + window.scrollY + 6;
+    
+    // Check if overlay fits in viewport
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    
+    // Adjust horizontal position if needed
+    if (left + overlayRect.width > viewportWidth) {
+      left = viewportWidth - overlayRect.width - 10;
+    }
+    
+    // Adjust vertical position if needed
+    if (top + overlayRect.height > viewportHeight + window.scrollY) {
+      top = rect.top + window.scrollY - overlayRect.height - 6;
+    }
+    
+    // Ensure minimum margins
+    left = Math.max(10, left);
+    top = Math.max(10, top);
+    
+    overlay.style.left = `${left}px`;
+    overlay.style.top = `${top}px`;
   }
 
   showSavePromptModal(prefillText: string): Promise<SavePromptUIResult | null> {
@@ -238,34 +341,47 @@ export class UIService implements IUIService {
       modal.style.maxWidth = '600px';
 
       modal.innerHTML = `
-        <h2 style="margin: 0 0 16px 0; color: #333;">Save Prompt</h2>
+        <h2 id="modal-title" style="margin: 0 0 16px 0; color: #333;">Save Prompt</h2>
         <div style="margin-bottom: 16px;">
-          <label style="display: block; margin-bottom: 4px; font-weight: 500;">Name:</label>
-          <input type="text" id="prompt-name" placeholder="Enter prompt name" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+          <label for="prompt-name" style="display: block; margin-bottom: 4px; font-weight: 500;">Name:</label>
+          <input type="text" id="prompt-name" aria-describedby="name-help" placeholder="Enter prompt name" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+          <div id="name-help" style="font-size: 12px; color: #666; margin-top: 4px;">A short, descriptive name for your prompt</div>
         </div>
         <div style="margin-bottom: 16px;">
-          <label style="display: block; margin-bottom: 4px; font-weight: 500;">Description:</label>
-          <input type="text" id="prompt-description" placeholder="Enter description (optional)" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+          <label for="prompt-description" style="display: block; margin-bottom: 4px; font-weight: 500;">Description:</label>
+          <input type="text" id="prompt-description" aria-describedby="description-help" placeholder="Enter description (optional)" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+          <div id="description-help" style="font-size: 12px; color: #666; margin-top: 4px;">Optional description to help you remember what this prompt does</div>
         </div>
         <div style="margin-bottom: 16px;">
-          <label style="display: block; margin-bottom: 4px; font-weight: 500;">Template:</label>
-          <textarea id="prompt-template" readonly style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-height: 80px; resize: vertical; background-color: #f9f9f9;">${prefillText}</textarea>
+          <label for="prompt-template" style="display: block; margin-bottom: 4px; font-weight: 500;">Template:</label>
+          <textarea id="prompt-template" readonly aria-describedby="template-help" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-height: 80px; resize: vertical; background-color: #f9f9f9;">${prefillText}</textarea>
+          <div id="template-help" style="font-size: 12px; color: #666; margin-top: 4px;">The prompt template that will be inserted when selected</div>
         </div>
         <div style="display: flex; gap: 8px; justify-content: flex-end;">
-          <button id="cancel-btn" style="padding: 8px 16px; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer;">Cancel</button>
-          <button id="save-btn" style="padding: 8px 16px; border: none; background: #007bff; color: white; border-radius: 4px; cursor: pointer;">Save</button>
+          <button id="cancel-btn" aria-describedby="cancel-help" style="padding: 8px 16px; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer;">Cancel</button>
+          <button id="save-btn" aria-describedby="save-help" style="padding: 8px 16px; border: none; background: #007bff; color: white; border-radius: 4px; cursor: pointer;">Save</button>
         </div>
+        <div id="cancel-help" style="display: none;">Close the modal without saving</div>
+        <div id="save-help" style="display: none;">Save the prompt and close the modal</div>
       `;
+
+      // Add accessibility attributes to modal
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-labelledby', 'modal-title');
+      modal.setAttribute('aria-modal', 'true');
+      overlay.setAttribute('role', 'presentation');
 
       overlay.appendChild(modal);
       document.body.appendChild(overlay);
 
-      // Focus the name input
-      const nameInput = modal.querySelector('#prompt-name') as HTMLInputElement;
-      nameInput.focus();
-
       // Event handlers
       const cleanup = () => {
+        // Clean up accessibility service
+        this.accessibilityService.cleanup(modal);
+        
+        // Restore focus
+        this.accessibilityService.restoreFocus();
+        
         if (overlay.parentElement) {
           overlay.parentElement.removeChild(overlay);
         }
@@ -276,9 +392,32 @@ export class UIService implements IUIService {
         const description = (modal.querySelector('#prompt-description') as HTMLInputElement).value.trim();
         
         if (!name) {
-          alert('Please enter a name for the prompt');
+          // Announce validation error
+          this.accessibilityService.announceToScreenReader({
+            message: 'Please enter a name for the prompt',
+            priority: 'assertive'
+          });
+          
+          // Focus the name input and highlight it
+          const nameInput = modal.querySelector('#prompt-name') as HTMLInputElement;
+          nameInput.focus();
+          nameInput.style.borderColor = '#dc3545';
+          nameInput.style.borderWidth = '2px';
+          
+          // Clear the error styling after a delay
+          setTimeout(() => {
+            nameInput.style.borderColor = '#ddd';
+            nameInput.style.borderWidth = '1px';
+          }, 3000);
+          
           return;
         }
+
+        // Announce successful save
+        this.accessibilityService.announceToScreenReader({
+          message: `Prompt "${name}" saved successfully`,
+          priority: 'polite'
+        });
 
         cleanup();
         resolve({
@@ -289,9 +428,30 @@ export class UIService implements IUIService {
       };
 
       const handleCancel = () => {
+        // Announce cancellation
+        this.accessibilityService.announceToScreenReader({
+          message: 'Save prompt cancelled',
+          priority: 'polite'
+        });
+
         cleanup();
         resolve(null);
       };
+
+      // Set up accessibility service after handlers are defined
+      this.accessibilityService.storeCurrentFocus();
+      this.accessibilityService.setupKeyboardNavigation(modal);
+      this.accessibilityService.handleEscapeKey(modal, handleCancel);
+
+      // Focus the name input
+      const nameInput = modal.querySelector('#prompt-name') as HTMLInputElement;
+      nameInput.focus();
+
+      // Announce modal opening
+      this.accessibilityService.announceToScreenReader({
+        message: 'Save prompt modal opened. Fill in the name and description, then press Save or Cancel.',
+        priority: 'assertive'
+      });
 
       // Add event listeners
       modal.querySelector('#save-btn')?.addEventListener('click', handleSave);

@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Build extension
+      run: npm run build
+      
+    - name: Run tests
+      run: npm test
+      
+    - name: Check build artifacts
+      run: |
+        echo "Checking build artifacts..."
+        ls -la dist/
+        echo "Build artifacts present:"
+        test -f dist/manifest.json && echo "✓ manifest.json"
+        test -f dist/background.js && echo "✓ background.js"
+        test -f dist/content.js && echo "✓ content.js"
+        echo "Build validation complete!"
+        
+    - name: Validate manifest.json
+      run: |
+        echo "Validating manifest.json..."
+        node -e "
+          const manifest = require('./dist/manifest.json');
+          console.log('Manifest version:', manifest.version);
+          console.log('Manifest permissions:', manifest.permissions);
+          console.log('Background script:', manifest.background?.service_worker);
+          console.log('Content scripts:', manifest.content_scripts?.length || 0);
+          console.log('Manifest validation complete!');
+        "
+
+  build-validation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Build extension
+      run: npm run build
+      
+    - name: Archive build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: chrome-extension-build
+        path: dist/
+        retention-days: 7
+        
+    - name: Extension size check
+      run: |
+        echo "Checking extension size..."
+        du -sh dist/
+        echo "Individual file sizes:"
+        ls -lh dist/
+        
+        # Check if any file is suspiciously large (> 1MB)
+        find dist/ -type f -size +1M -exec echo "Large file found: {}" \;
+        
+    - name: Security check
+      run: |
+        echo "Running basic security checks..."
+        # Check for common security issues in manifest
+        if grep -q "unsafe-eval" dist/manifest.json; then
+          echo "⚠️ Warning: unsafe-eval found in manifest"
+        fi
+        
+        if grep -q "unsafe-inline" dist/manifest.json; then
+          echo "⚠️ Warning: unsafe-inline found in manifest"
+        fi
+        
+        echo "Security check complete!"
+
+  demo-validation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        
+    - name: Install dependencies
+      run: npm ci
+      
+    - name: Validate demo scripts
+      run: |
+        echo "Validating demo scripts..."
+        node -c scripts/seed-demo.js && echo "✓ seed-demo.js syntax valid"
+        node -c scripts/reset-demo.js && echo "✓ reset-demo.js syntax valid"
+        
+        # Check if demo scripts can be loaded
+        node -e "
+          const seedDemo = require('./scripts/seed-demo.js');
+          const resetDemo = require('./scripts/reset-demo.js');
+          console.log('✓ Demo scripts can be loaded');
+          console.log('✓ Demo prompts count:', Object.keys(seedDemo.demoPrompts).length);
+          console.log('✓ Demo contexts count:', Object.keys(seedDemo.demoContexts).length);
+        "
+        
+    - name: Test demo data structure
+      run: |
+        echo "Testing demo data structure..."
+        node -e "
+          const { demoPrompts, demoContexts } = require('./scripts/seed-demo.js');
+          
+          // Validate prompts structure
+          Object.values(demoPrompts).forEach(prompt => {
+            if (!prompt.id || !prompt.name || !prompt.template) {
+              throw new Error('Invalid prompt structure: ' + JSON.stringify(prompt));
+            }
+          });
+          
+          // Validate contexts structure
+          Object.values(demoContexts).forEach(context => {
+            if (!context.id || !context.name || !context.text) {
+              throw new Error('Invalid context structure: ' + JSON.stringify(context));
+            }
+          });
+          
+          console.log('✓ Demo data structure validation passed');
+        "

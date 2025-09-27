@@ -5,7 +5,11 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "test": "vitest"
+    "test": "vitest",
+    "demo": "node scripts/seed-demo.js",
+    "demo:reset": "node scripts/reset-demo.js",
+    "dev": "npm run build && echo 'Extension built. Load dist/ folder in Chrome Extensions page.'",
+    "clean": "rimraf dist/ && echo 'Build artifacts cleaned.'"
   },
   "keywords": [],
   "author": "",

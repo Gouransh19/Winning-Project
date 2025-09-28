@@ -1,12 +1,57 @@
 // content.ts
 // Content script: orchestrates the UI and storage services.
-import { Message, Prompt } from './core/types';
+import { Message, Prompt, Context } from './core/types';
 import { IUIService, UIService } from './core/ui-service';
+import { ISelectionService, SelectionService } from './core/selection-service';
+import { IConfigService, ConfigService } from './core/config-service';
 
 declare const chrome: any;
 
 // Services are now responsible for implementation details.
+const configService: IConfigService = new ConfigService();
+const selectionService: ISelectionService = new SelectionService();
 const ui: IUIService = new UIService();
+
+// Initialize text selection detection
+selectionService.onSelectionChange((hasSelection, selectedText) => {
+  if (hasSelection) {
+    console.log("CONTENT: Text selected, showing brain button");
+    const bounds = selectionService.getSelectionBounds();
+    if (bounds) {
+      ui.showBrainButton({ x: bounds.x, y: bounds.y }, () => {
+        console.log("CONTENT: Brain button clicked, opening save context modal");
+        ui.showSaveContextModal(selectedText).then((result) => {
+          if (result) {
+            console.log("CONTENT: User wants to save context:", result);
+            
+            // Send save request to background
+            chrome.runtime.sendMessage({ 
+              type: 'SAVE_CONTEXT_REQUEST', 
+              payload: result 
+            } as Message, (response: Message) => {
+              console.log('CONTENT: Save context response:', response);
+              
+              if (response?.type === 'SAVE_CONTEXT_RESPONSE') {
+                const saveResponse = response as any;
+                if (saveResponse.payload?.success) {
+                  ui.showSuccessToast('Context saved successfully!');
+                } else {
+                  console.error('CONTENT: Failed to save context:', saveResponse.payload?.error);
+                  ui.showSuccessToast('Failed to save context: ' + (saveResponse.payload?.error || 'Unknown error'));
+                }
+              }
+            });
+          } else {
+            console.log("CONTENT: User cancelled save context modal.");
+          }
+        });
+      });
+    }
+  } else {
+    console.log("CONTENT: No text selected, hiding brain button");
+    ui.hideBrainButton();
+  }
+});
 
 // Main application logic
 ui.onTextAreaInput(text => {
@@ -29,6 +74,26 @@ ui.onTextAreaInput(text => {
         // On select, use the UI service to update the text area
         const currentText = ui.getTextAreaValue();
         const newText = currentText.replace(/\/\/$/, selectedPrompt.template);
+        ui.setTextAreaValue(newText);
+      });
+    });
+  } else if (text.endsWith('@')) {
+    console.log("CONTENT: Detected '@', requesting contexts.");
+
+    // Message the background script to get contexts from storage
+    chrome.runtime.sendMessage({ type: 'GET_CONTEXTS_REQUEST' } as Message, (response: Message) => {
+      console.log('CONTENT: Received contexts response:', response);
+      if (response?.type !== 'GET_CONTEXTS_RESPONSE' || !('payload' in response)) {
+        return;
+      }
+
+      const contexts: Context[] = (response as any).payload || [];
+
+      // Use the UI service to show the context selector
+      ui.showContextSelector(contexts, (selectedContext) => {
+        // On select, use the UI service to update the text area
+        const currentText = ui.getTextAreaValue();
+        const newText = currentText.replace(/@$/, selectedContext.text);
         ui.setTextAreaValue(newText);
       });
     });
@@ -78,8 +143,9 @@ ui.onTextAreaInput(text => {
       }
     });
   } else {
-    // If text doesn't end with '//' or '+', ensure the selector is hidden.
+    // If text doesn't end with '//', '@', or '+', ensure the selectors are hidden.
     // The UI service is smart enough to handle this internally, but this is an explicit trigger.
     ui.hidePromptSelector();
+    ui.hideContextSelector();
   }
 });

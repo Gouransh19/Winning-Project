@@ -1,8 +1,9 @@
 // core/ui-service.ts
 // Interface-first contract for UI-related operations.
 
-import { Prompt } from './types';
+import { Prompt, Context } from './types';
 import { IAccessibilityService, AccessibilityService } from './accessibility-service';
+import { IBrainButtonService, BrainButtonService } from './brain-button-service';
 
 /**
  * Describes the data returned when a user successfully saves a prompt via the UI.
@@ -11,6 +12,14 @@ export interface SavePromptUIResult {
   name: string;
   description: string;
   template: string; // The actual prompt text
+}
+
+/**
+ * Describes the data returned when a user successfully saves a context via the UI.
+ */
+export interface SaveContextUIResult {
+  name: string;
+  text: string; // The actual context text
 }
 
 /**
@@ -68,19 +77,55 @@ export interface IUIService {
    * @param message The text to display.
    */
   showSuccessToast(message: string): void;
+
+  // === Context-related UI ===
+
+  /**
+   * Displays the context selector UI near the text area.
+   * @param contexts The list of contexts to display.
+   * @param onSelect The callback to execute when a user selects a context.
+   */
+  showContextSelector(contexts: Context[], onSelect: (selectedContext: Context) => void): void;
+
+  /**
+   * Hides the context selector UI.
+   */
+  hideContextSelector(): void;
+
+  /**
+   * Displays a modal dialog for saving a new context.
+   * @param prefillText The text currently selected, to be used as the context's text.
+   * @returns A promise that resolves with the completed context details if the user saves,
+   * or resolves with `null` if the user cancels.
+   */
+  showSaveContextModal(prefillText: string): Promise<SaveContextUIResult | null>;
+
+  /**
+   * Shows the brain button near selected text.
+   * @param position The position to show the brain button.
+   * @param onSave The callback to execute when the brain button is clicked.
+   */
+  showBrainButton(position: { x: number; y: number }, onSave: () => void): void;
+
+  /**
+   * Hides the brain button.
+   */
+  hideBrainButton(): void;
 }
 
 export class UIService implements IUIService {
   private editableEl: (HTMLElement & { innerText: string }) | null = null;
   private accessibilityService: IAccessibilityService;
+  private brainButtonService: IBrainButtonService;
   private readonly TEXTAREA_SELECTORS = [
     '[contenteditable="true"][role="textbox"]',
     '[contenteditable="true"][aria-multiline="true"]',
     '[contenteditable="true"]',
   ];
 
-  constructor(accessibilityService?: IAccessibilityService) {
+  constructor(accessibilityService?: IAccessibilityService, brainButtonService?: IBrainButtonService) {
     this.accessibilityService = accessibilityService || new AccessibilityService();
+    this.brainButtonService = brainButtonService || new BrainButtonService();
     this.findEditable();
     if (!this.editableEl) {
       console.warn('UIService: Editable input not found on init; observing DOM.');
@@ -516,5 +561,321 @@ export class UIService implements IUIService {
         toast.parentElement.removeChild(toast);
       }
     }, 3000);
+  }
+
+  // === Context-related UI Implementation ===
+
+  showContextSelector(contexts: Context[], onSelect: (selectedContext: Context) => void): void {
+    this.hideContextSelector(); // Ensure no old selector exists
+    if (!this.editableEl) return;
+
+    const overlay = this.createContextOverlay();
+    
+    // Add accessibility attributes
+    overlay.setAttribute('role', 'listbox');
+    overlay.setAttribute('aria-label', 'Context selector');
+    overlay.setAttribute('aria-expanded', 'true');
+
+    if (contexts.length === 0) {
+      const empty = document.createElement('div');
+      empty.textContent = 'No contexts available.';
+      empty.setAttribute('role', 'status');
+      empty.setAttribute('aria-live', 'polite');
+      overlay.appendChild(empty);
+    }
+
+    contexts.forEach((c, index) => {
+      const btn = document.createElement('button');
+      btn.textContent = c.name;
+      btn.setAttribute('role', 'option');
+      btn.setAttribute('aria-label', `${c.name}: ${c.text.substring(0, 50)}${c.text.length > 50 ? '...' : ''}`);
+      btn.setAttribute('aria-selected', 'false');
+      btn.setAttribute('tabindex', index === 0 ? '0' : '-1');
+      
+      // Enhanced styling for accessibility
+      btn.style.display = 'block';
+      btn.style.width = '100%';
+      btn.style.textAlign = 'left';
+      btn.style.margin = '4px 0';
+      btn.style.padding = '8px 12px';
+      btn.style.border = '1px solid transparent';
+      btn.style.borderRadius = '4px';
+      btn.style.backgroundColor = 'transparent';
+      btn.style.cursor = 'pointer';
+      
+      // Focus styles
+      btn.addEventListener('focus', () => {
+        btn.style.backgroundColor = '#e3f2fd';
+        btn.style.borderColor = '#2196f3';
+        btn.setAttribute('aria-selected', 'true');
+        // Remove selection from other items
+        overlay.querySelectorAll('button').forEach(otherBtn => {
+          if (otherBtn !== btn) {
+            otherBtn.setAttribute('aria-selected', 'false');
+            otherBtn.style.backgroundColor = 'transparent';
+            otherBtn.style.borderColor = 'transparent';
+          }
+        });
+      });
+      
+      btn.addEventListener('blur', () => {
+        btn.style.backgroundColor = 'transparent';
+        btn.style.borderColor = 'transparent';
+      });
+      
+      btn.addEventListener('click', () => {
+        onSelect(c);
+        this.hideContextSelector();
+      });
+      
+      overlay.appendChild(btn);
+    });
+
+    // Position the overlay
+    this.positionOverlay(overlay);
+
+    document.body.appendChild(overlay);
+
+    // Set up accessibility service
+    this.accessibilityService.storeCurrentFocus();
+    this.accessibilityService.setupKeyboardNavigation(overlay);
+    this.accessibilityService.handleEscapeKey(overlay, () => {
+      this.hideContextSelector();
+    });
+
+    // Handle resize and scroll
+    this.accessibilityService.handleResize(overlay, () => {
+      this.positionOverlay(overlay);
+    });
+    this.accessibilityService.handleScroll(overlay, () => {
+      this.positionOverlay(overlay);
+    });
+
+    // Focus first item
+    this.accessibilityService.focusFirstElement(overlay);
+
+    // Announce to screen readers
+    this.accessibilityService.announceToScreenReader({
+      message: `Context selector opened with ${contexts.length} contexts. Use arrow keys to navigate, Enter to select, or Escape to close.`,
+      priority: 'polite'
+    });
+
+    // Add click outside to close
+    const onClick = (e: MouseEvent) => {
+      if (e.target && overlay.contains(e.target as Node)) return; // Click was inside
+      if (e.target !== this.editableEl) {
+        this.hideContextSelector();
+        document.removeEventListener('click', onClick);
+      }
+    };
+    document.addEventListener('click', onClick, { capture: true });
+  }
+
+  hideContextSelector(): void {
+    const existing = document.getElementById('spine-context-overlay');
+    if (existing && existing.parentElement) {
+      // Clean up accessibility service
+      this.accessibilityService.cleanup(existing);
+      
+      // Restore focus
+      this.accessibilityService.restoreFocus();
+      
+      // Remove from DOM
+      existing.parentElement.removeChild(existing);
+      
+      // Announce to screen readers
+      this.accessibilityService.announceToScreenReader({
+        message: 'Context selector closed',
+        priority: 'polite'
+      });
+    }
+  }
+
+  showSaveContextModal(prefillText: string): Promise<SaveContextUIResult | null> {
+    const modalId = 'context-save-modal';
+    if (document.getElementById(modalId)) {
+      return Promise.resolve(null);
+    }
+
+    return new Promise<SaveContextUIResult | null>((resolve) => {
+      // Create modal overlay
+      const overlay = document.createElement('div');
+      overlay.id = modalId;
+      overlay.style.position = 'fixed';
+      overlay.style.top = '0';
+      overlay.style.left = '0';
+      overlay.style.width = '100%';
+      overlay.style.height = '100%';
+      overlay.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+      overlay.style.zIndex = '999999';
+      overlay.style.display = 'flex';
+      overlay.style.alignItems = 'center';
+      overlay.style.justifyContent = 'center';
+
+      // Create modal content
+      const modal = document.createElement('div');
+      modal.style.backgroundColor = 'white';
+      modal.style.padding = '24px';
+      modal.style.borderRadius = '8px';
+      modal.style.boxShadow = '0 4px 20px rgba(0, 0, 0, 0.15)';
+      modal.style.minWidth = '400px';
+      modal.style.maxWidth = '600px';
+
+      modal.innerHTML = `
+        <h2 id="context-modal-title" style="margin: 0 0 16px 0; color: #333;">Save Context</h2>
+        <div style="margin-bottom: 16px;">
+          <label for="context-name" style="display: block; margin-bottom: 4px; font-weight: 500;">Name:</label>
+          <input type="text" id="context-name" aria-describedby="context-name-help" placeholder="Enter context name" required style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px;">
+          <div id="context-name-help" style="font-size: 12px; color: #666; margin-top: 4px;">A short, descriptive name for your context</div>
+        </div>
+        <div style="margin-bottom: 16px;">
+          <label for="context-text" style="display: block; margin-bottom: 4px; font-weight: 500;">Text:</label>
+          <textarea id="context-text" readonly aria-describedby="context-text-help" style="width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; font-size: 14px; min-height: 120px; resize: vertical; background-color: #f9f9f9;">${prefillText}</textarea>
+          <div id="context-text-help" style="font-size: 12px; color: #666; margin-top: 4px;">The context text that will be inserted when selected</div>
+        </div>
+        <div style="display: flex; gap: 8px; justify-content: flex-end;">
+          <button id="context-cancel-btn" aria-describedby="context-cancel-help" style="padding: 8px 16px; border: 1px solid #ddd; background: white; border-radius: 4px; cursor: pointer;">Cancel</button>
+          <button id="context-save-btn" aria-describedby="context-save-help" style="padding: 8px 16px; border: none; background: #007bff; color: white; border-radius: 4px; cursor: pointer;">Save</button>
+        </div>
+        <div id="context-cancel-help" style="display: none;">Close the modal without saving</div>
+        <div id="context-save-help" style="display: none;">Save the context and close the modal</div>
+      `;
+
+      // Add accessibility attributes to modal
+      modal.setAttribute('role', 'dialog');
+      modal.setAttribute('aria-labelledby', 'context-modal-title');
+      modal.setAttribute('aria-modal', 'true');
+      overlay.setAttribute('role', 'presentation');
+
+      overlay.appendChild(modal);
+      document.body.appendChild(overlay);
+
+      // Event handlers
+      const cleanup = () => {
+        // Clean up accessibility service
+        this.accessibilityService.cleanup(modal);
+        
+        // Restore focus
+        this.accessibilityService.restoreFocus();
+        
+        if (overlay.parentElement) {
+          overlay.parentElement.removeChild(overlay);
+        }
+      };
+
+      const handleSave = () => {
+        const name = (modal.querySelector('#context-name') as HTMLInputElement).value.trim();
+        
+        if (!name) {
+          // Announce validation error
+          this.accessibilityService.announceToScreenReader({
+            message: 'Please enter a name for the context',
+            priority: 'assertive'
+          });
+          
+          // Focus the name input and highlight it
+          const nameInput = modal.querySelector('#context-name') as HTMLInputElement;
+          nameInput.focus();
+          nameInput.style.borderColor = '#dc3545';
+          nameInput.style.borderWidth = '2px';
+          
+          // Clear the error styling after a delay
+          setTimeout(() => {
+            nameInput.style.borderColor = '#ddd';
+            nameInput.style.borderWidth = '1px';
+          }, 3000);
+          
+          return;
+        }
+
+        // Announce successful save
+        this.accessibilityService.announceToScreenReader({
+          message: `Context "${name}" saved successfully`,
+          priority: 'polite'
+        });
+
+        cleanup();
+        resolve({
+          name,
+          text: prefillText
+        });
+      };
+
+      const handleCancel = () => {
+        // Announce cancellation
+        this.accessibilityService.announceToScreenReader({
+          message: 'Save context cancelled',
+          priority: 'polite'
+        });
+
+        cleanup();
+        resolve(null);
+      };
+
+      // Set up accessibility service after handlers are defined
+      this.accessibilityService.storeCurrentFocus();
+      this.accessibilityService.setupKeyboardNavigation(modal);
+      this.accessibilityService.handleEscapeKey(modal, handleCancel);
+
+      // Focus the name input
+      const nameInput = modal.querySelector('#context-name') as HTMLInputElement;
+      nameInput.focus();
+
+      // Announce modal opening
+      this.accessibilityService.announceToScreenReader({
+        message: 'Save context modal opened. Fill in the name, then press Save or Cancel.',
+        priority: 'assertive'
+      });
+
+      // Add event listeners
+      modal.querySelector('#context-save-btn')?.addEventListener('click', handleSave);
+      modal.querySelector('#context-cancel-btn')?.addEventListener('click', handleCancel);
+      
+      // Close on overlay click
+      overlay.addEventListener('click', (e) => {
+        if (e.target === overlay) {
+          handleCancel();
+        }
+      });
+
+      // Close on Escape key
+      const handleKeydown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          handleCancel();
+          document.removeEventListener('keydown', handleKeydown);
+        }
+      };
+      document.addEventListener('keydown', handleKeydown);
+
+      // Enter key to save
+      const handleEnter = (e: KeyboardEvent) => {
+        if (e.key === 'Enter' && e.ctrlKey) {
+          handleSave();
+        }
+      };
+      document.addEventListener('keydown', handleEnter);
+    });
+  }
+
+  showBrainButton(position: { x: number; y: number }, onSave: () => void): void {
+    this.brainButtonService.show(position, onSave);
+  }
+
+  hideBrainButton(): void {
+    this.brainButtonService.hide();
+  }
+
+  private createContextOverlay(): HTMLDivElement {
+    const overlay = document.createElement('div');
+    overlay.style.position = 'absolute';
+    overlay.style.background = 'white';
+    overlay.style.border = '1px solid #ccc';
+    overlay.style.padding = '8px';
+    overlay.style.zIndex = '999999';
+    overlay.style.maxHeight = '200px';
+    overlay.style.overflow = 'auto';
+    overlay.style.boxShadow = '0 4px 12px rgba(0,0,0,0.15)';
+    overlay.id = 'spine-context-overlay';
+    return overlay;
   }
 }
